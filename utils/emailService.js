@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const SibApiV3Sdk = require('sib-api-v3-sdk');
 
 const getSmtpConfig = () => {
     const host = process.env.SMTP_HOST;
@@ -25,27 +26,48 @@ const createTransporter = () => {
     });
 };
 
-const sendVerificationOtp = async (email, otp) => {
-    const { from } = getSmtpConfig();
-    const transporter = createTransporter();
-    const subject = 'Campus Bazaar Email Verification OTP';
-    const text = `Your Campus Bazaar verification OTP is ${otp}. It expires in 10 minutes.`;
-    const html = `
-        <div style="font-family: Arial, sans-serif; line-height: 1.5;">
-            <h2>Verify your Campus Bazaar account</h2>
-            <p>Your OTP is:</p>
-            <p style="font-size: 22px; font-weight: bold;">${otp}</p>
-            <p>This code expires in 10 minutes.</p>
-        </div>
-    `;
+// const sendVerificationOtp = async (email, otp) => {
+//     const { from } = getSmtpConfig();
+//     const transporter = createTransporter();
+//     const subject = 'Campus Bazaar Email Verification OTP';
+//     const text = `Your Campus Bazaar verification OTP is ${otp}. It expires in 10 minutes.`;
+//     const html = `
+//         <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+//             <h2>Verify your Campus Bazaar account</h2>
+//             <p>Your OTP is:</p>
+//             <p style="font-size: 22px; font-weight: bold;">${otp}</p>
+//             <p>This code expires in 10 minutes.</p>
+//         </div>
+//     `;
 
-    await transporter.sendMail({
-        from,
-        to: email,
-        subject,
-        text,
-        html
-    });
+//     await transporter.sendMail({
+//         from,
+//         to: email,
+//         subject,
+//         text,
+//         html
+//     });
+// };
+
+const sendVerificationOtp = async (email, otp) => {
+  const client = SibApiV3Sdk.ApiClient.instance;
+  const apiKey = client.authentications['api-key'];
+
+  apiKey.apiKey = process.env.BREVO_API_KEY;
+
+  const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
+
+  const sendSmtpEmail = {
+    to: [{ email }],
+    sender: { email: process.env.SMTP_FROM },
+    subject: "Campus Bazaar OTP Verification",
+    htmlContent: `
+      <h2>Your OTP is: ${otp}</h2>
+      <p>Expires in 10 minutes</p>
+    `
+  };
+
+  await apiInstance.sendTransacEmail(sendSmtpEmail);
 };
 
 module.exports = { sendVerificationOtp };
