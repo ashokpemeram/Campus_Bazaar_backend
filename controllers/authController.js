@@ -71,10 +71,15 @@ const register = async (req, res) => {
         await user.save();
 
         try {
-            await sendVerificationOtp(normalizedEmail, otp);
+            sendVerificationOtp(normalizedEmail, otp)
+                .then(() => console.log("OTP sent"))
+                .catch(err => console.error("Email error:", err));
         } catch (mailErr) {
-            await User.deleteOne({ _id: user._id });
-            return res.status(500).json({ message: mailErr.message || 'Failed to send verification email' });
+            return res.status(201).json({
+                message: "User registered. OTP will be sent shortly."
+            });
+            // await User.deleteOne({ _id: user._id });
+            // return res.status(500).json({ message: mailErr.message || 'Failed to send verification email' });
         }
 
         res.status(201).json({ message: 'Verification OTP sent to your college email' });
