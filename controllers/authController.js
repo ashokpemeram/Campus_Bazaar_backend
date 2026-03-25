@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { normalizeEmail, getEmailDomain, isAllowedCollegeEmail } = require('../utils/emailValidation');
 const { generateOtp, hashOtp, compareOtp, getOtpExpiry } = require('../utils/otp');
@@ -147,15 +148,15 @@ const verifyOtp = async (req, res) => {
         if (user.isVerified) return res.status(400).json({ message: 'Email is already verified' });
 
         if (!user.verificationOtpHash || !user.verificationOtpExpires) {
-            return res.status(400).json({ message: 'OTP not found. Please resend OTP.' });
+            return res.status(400).json({ message: 'Invalid or expired OTP' });
         }
 
         if (user.verificationOtpExpires.getTime() < Date.now()) {
-            return res.status(400).json({ message: 'OTP expired. Please resend OTP.' });
+            return res.status(400).json({ message: 'Invalid or expired OTP' });
         }
 
         const isMatch = await compareOtp(sanitizedOtp, user.verificationOtpHash);
-        if (!isMatch) return res.status(400).json({ message: 'Invalid email or OTP' });
+        if (!isMatch) return res.status(400).json({ message: 'Invalid or expired OTP' });
 
         user.isVerified = true;
         user.verificationOtpHash = undefined;
@@ -163,7 +164,7 @@ const verifyOtp = async (req, res) => {
         await syncCollegeFields(user);
         await user.save();
 
-        res.json({ message: 'Email verified successfully. You can now log in.' });
+        res.status(200).json({ message: 'OTP verified successfully' });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -236,4 +237,23 @@ const updateProfile = async (req, res) => {
     }
 };
 
-module.exports = { register, login, verifyOtp, resendOtp, updateProfile };
+const changePassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ message: 'User not found' });
+
+        const isMatch = await bcrypt.compare(oldPassword, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Incorrect old password' });
+        }
+
+        user.password = newPassword;
+        await user.save();
+        res.json({ message: 'Password updated successfully' });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+module.exports = { register, login, verifyOtp, resendOtp, updateProfile, changePassword };

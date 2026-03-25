@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
 const Report = require('../models/Report');
+const Notification = require('../models/Notification');
 
 // User Management
 const getAllUsers = async (req, res) => {
@@ -16,6 +17,16 @@ const getAllUsers = async (req, res) => {
 const blockUser = async (req, res) => {
     try {
         const user = await User.findByIdAndUpdate(req.params.id, { isBlocked: true }, { new: true });
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+const unblockUser = async (req, res) => {
+    try {
+        const user = await User.findByIdAndUpdate(req.params.id, { isBlocked: false }, { new: true });
+        if (!user) return res.status(404).json({ message: 'User not found' });
         res.json(user);
     } catch (err) {
         res.status(500).json({ message: err.message });
@@ -54,6 +65,27 @@ const rejectProduct = async (req, res) => {
     try {
         const product = await Product.findByIdAndUpdate(req.params.id, { status: 'rejected' }, { new: true });
         res.json(product);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+};
+
+const deleteProduct = async (req, res) => {
+    try {
+        const product = await Product.findById(req.params.id);
+        if (!product) return res.status(404).json({ message: 'Product not found' });
+
+        const owner = await User.findById(product.sellerId);
+        await Product.findByIdAndDelete(req.params.id);
+
+        if (owner) {
+            await Notification.create({
+                userId: owner._id,
+                message: `Your product "${product.title}" was removed by admin`
+            });
+        }
+
+        res.json({ message: 'Product deleted' });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
@@ -102,8 +134,8 @@ const getStats = async (req, res) => {
 };
 
 module.exports = {
-    getAllUsers, blockUser, deleteUser,
-    getAllProducts, approveProduct, rejectProduct,
+    getAllUsers, blockUser, unblockUser, deleteUser,
+    getAllProducts, approveProduct, rejectProduct, deleteProduct,
     getAllOrders, updateOrderStatus,
     getAllReports, getStats
 };

@@ -117,9 +117,9 @@ const fallbackSuggestion = (payload) => {
 
     const baseByCategory = {
         electronics: 5000,
+        furniture: 1500,
         books: 300,
         clothing: 600,
-        'dorm essentials': 800,
         tools: 1200
     };
 

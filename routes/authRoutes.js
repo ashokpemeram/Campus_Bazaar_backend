@@ -1,5 +1,6 @@
-const { register, login, verifyOtp, resendOtp, updateProfile } = require('../controllers/authController');
+const { register, login, verifyOtp, resendOtp, updateProfile, changePassword } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/authMiddleware');
+const { validateRegister, validateProfileUpdate, validateChangePassword, handleValidationErrors } = require('../middleware/validators');
 const multer = require('multer');
 const path = require('path');
 const express = require('express');
@@ -12,10 +13,11 @@ const upload = multer({ storage });
 
 const router = express.Router();
 
-router.post('/register', register);
+router.post('/register', validateRegister, handleValidationErrors, register);
 router.post('/login', login);
 router.post('/verify-otp', verifyOtp);
 router.post('/resend-otp', resendOtp);
-router.put('/update-profile', authMiddleware, upload.single('avatar'), updateProfile);
+router.put('/update-profile', authMiddleware, upload.single('avatar'), validateProfileUpdate, handleValidationErrors, updateProfile);
+router.post('/change-password', authMiddleware, validateChangePassword, handleValidationErrors, changePassword);
 
 module.exports = router;
