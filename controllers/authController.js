@@ -72,7 +72,7 @@ const register = async (req, res) => {
 
         try {
             sendVerificationOtp(normalizedEmail, otp)
-                .then(() => console.log("OTP sent"))
+                .then(() => res.status(201).json({ message: 'Verification OTP sent to your college email' }))
                 .catch(err => console.error("Email error:", err));
         } catch (mailErr) {
             return res.status(201).json({
@@ -82,7 +82,7 @@ const register = async (req, res) => {
             // return res.status(500).json({ message: mailErr.message || 'Failed to send verification email' });
         }
 
-        res.status(201).json({ message: 'Verification OTP sent to your college email' });
+        
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
