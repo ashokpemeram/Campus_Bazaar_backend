@@ -123,11 +123,108 @@ const getAllReports = async (req, res) => {
 // Stats
 const getStats = async (req, res) => {
     try {
-        const totalUsers = await User.countDocuments();
-        const totalProducts = await Product.countDocuments();
-        const totalOrders = await Order.countDocuments();
-        const stats = { totalUsers, totalProducts, totalOrders };
-        res.json(stats);
+        const now = new Date();
+        const endUtc = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate(),
+            23, 59, 59, 999
+        ));
+        const startUtc = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - 6,
+            0, 0, 0, 0
+        ));
+        const prevStartUtc = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - 13,
+            0, 0, 0, 0
+        ));
+        const prevEndUtc = new Date(Date.UTC(
+            now.getUTCFullYear(),
+            now.getUTCMonth(),
+            now.getUTCDate() - 7,
+            23, 59, 59, 999
+        ));
+
+        const revenueMatch = {
+            $or: [
+                { status: { $in: ['completed', 'delivered'] } },
+                { paymentStatus: 'success' }
+            ]
+        };
+
+        const [
+            totalUsers,
+            activeUsers,
+            blockedUsers,
+            totalProducts,
+            totalOrders,
+            revenueAgg,
+            revenue7dAgg,
+            revenuePrev7dAgg,
+            salesAgg
+        ] = await Promise.all([
+            User.countDocuments(),
+            User.countDocuments({ isBlocked: false }),
+            User.countDocuments({ isBlocked: true }),
+            Product.countDocuments({ status: 'approved', isAvailable: true }),
+            Order.countDocuments(),
+            Order.aggregate([
+                { $match: revenueMatch },
+                { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+            ]),
+            Order.aggregate([
+                { $match: { ...revenueMatch, createdAt: { $gte: startUtc, $lte: endUtc } } },
+                { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+            ]),
+            Order.aggregate([
+                { $match: { ...revenueMatch, createdAt: { $gte: prevStartUtc, $lte: prevEndUtc } } },
+                { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+            ]),
+            Order.aggregate([
+                { $match: { ...revenueMatch, createdAt: { $gte: startUtc, $lte: endUtc } } },
+                {
+                    $group: {
+                        _id: {
+                            $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' }
+                        },
+                        total: { $sum: '$totalAmount' }
+                    }
+                },
+                { $sort: { _id: 1 } }
+            ])
+        ]);
+
+        const revenue = revenueAgg[0]?.total || 0;
+        const revenue7d = revenue7dAgg[0]?.total || 0;
+        const revenuePrev7d = revenuePrev7dAgg[0]?.total || 0;
+        const growthPercent = revenuePrev7d > 0
+            ? Number((((revenue7d - revenuePrev7d) / revenuePrev7d) * 100).toFixed(1))
+            : 0;
+
+        const salesMap = new Map(salesAgg.map((entry) => [entry._id, entry.total]));
+        const labels = [];
+        const data = [];
+        for (let i = 0; i < 7; i += 1) {
+            const day = new Date(startUtc.getTime() + (i * 24 * 60 * 60 * 1000));
+            const key = day.toISOString().slice(0, 10);
+            labels.push(day.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }));
+            data.push(Number(salesMap.get(key) || 0));
+        }
+
+        res.json({
+            totalUsers,
+            totalProducts,
+            totalOrders,
+            revenue,
+            activeUsers,
+            blockedUsers,
+            salesByDay: { labels, data },
+            growthPercent
+        });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
