@@ -28,6 +28,11 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/campus-ba
     .then(() => console.log('Connected to MongoDB'))
     .catch(err => console.error('MongoDB connection error:', err));
 
+
+app.get('/', (req, res) => {
+  res.send('Backend is running 🚀');
+});
+
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
 setupSocket(server);
