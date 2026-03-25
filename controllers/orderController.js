@@ -17,7 +17,7 @@ const createOrder = async (req, res) => {
         for (const item of products) {
             const lockedProduct = await Product.findOneAndUpdate(
                 { _id: item.productId, isAvailable: true, status: 'approved' },
-                { isAvailable: false, status: 'pending' },
+                { isAvailable: false, status: 'reserved' },
                 { new: true }
             );
             
