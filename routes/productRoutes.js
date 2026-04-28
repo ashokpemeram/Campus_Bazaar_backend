@@ -13,14 +13,7 @@ const {
     getUserProducts
 } = require('../controllers/productController');
 const { validateProduct, handleValidationErrors } = require('../middleware/validators');
-const multer = require('multer');
-const path = require('path');
-
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
-});
-const upload = multer({ storage });
+const { productImageUpload } = require('../middleware/upload');
 
 const router = express.Router();
 
@@ -32,7 +25,7 @@ router.get('/new', getNewArrivals);
 router.get('/user/:userId', authMiddleware, getUserProducts);
 router.get('/my', authMiddleware, getUserProducts); // Shorthand for logged in user
 router.get('/:id', optionalAuth, getProductById);
-router.post('/', authMiddleware, upload.array('images', 5), validateProduct, handleValidationErrors, addProduct);
+router.post('/', authMiddleware, productImageUpload.array('images', 5), validateProduct, handleValidationErrors, addProduct);
 router.delete('/:id', authMiddleware, deleteProduct);
 
 module.exports = router;

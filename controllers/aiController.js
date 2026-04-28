@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const Product = require('../models/Product');
+const { getPriceModelClient } = require('../utils/priceModelClient');
 
 const PRICE_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const CACHE_TTL_MS = Number(process.env.AI_SUGGESTION_CACHE_TTL_MS || 10 * 60 * 1000);
@@ -53,9 +54,69 @@ const buildCacheKey = (payload) => {
         title: normalizeText(payload.title, 200).toLowerCase(),
         description: normalizeText(payload.description, 1000).toLowerCase(),
         category: normalizeText(payload.category, 80).toLowerCase(),
-        condition: normalizeText(payload.condition, 40).toLowerCase()
+        condition: normalizeText(payload.condition, 40).toLowerCase(),
+        brand: normalizeText(payload.brand, 80).toLowerCase(),
+        originalPrice: Number.isFinite(payload.originalPrice) ? payload.originalPrice : null
     };
     return crypto.createHash('sha256').update(JSON.stringify(normalized)).digest('hex');
+};
+
+const PRICE_MODEL_ENABLED = (process.env.PRICE_MODEL_ENABLED || 'true').toLowerCase() !== 'false';
+
+const KNOWN_BRANDS = [
+    'Adidas',
+    'Apple',
+    'Bosch',
+    'Dell',
+    'HarperCollins',
+    'HomeCentre',
+    'Ikea',
+    'Makita',
+    'Nike',
+    'Penguin',
+    'Puma',
+    'Samsung',
+    'Sony',
+    'UrbanLadder',
+    'Zara'
+];
+
+const mapCategoryForModel = (category) => {
+    const normalized = normalizeText(category, 80);
+    if (!normalized) return '';
+    if (normalized.toLowerCase() === 'clothing') return 'Clothes';
+    return normalized;
+};
+
+const mapConditionForModel = (condition) => {
+    const normalized = normalizeText(condition, 40);
+    if (!normalized) return '';
+    switch (normalized.toLowerCase()) {
+        case 'new':
+        case 'like new':
+            return 'New';
+        case 'good':
+        case 'used':
+            return 'Used-Good';
+        case 'fair':
+        case 'poor':
+            return 'Fair';
+        default:
+            return normalized;
+    }
+};
+
+const inferBrandFromText = ({ title, description, brand }) => {
+    const explicit = normalizeText(brand, 80);
+    if (explicit) return explicit;
+
+    const haystack = `${normalizeText(title, 200)} ${normalizeText(description, 1000)}`.toLowerCase();
+    if (!haystack.trim()) return '';
+
+    for (const knownBrand of KNOWN_BRANDS) {
+        if (haystack.includes(knownBrand.toLowerCase())) return knownBrand;
+    }
+    return '';
 };
 
 const getCachedSuggestion = (key) => {
@@ -259,7 +320,7 @@ const buildFinalSuggestion = ({
     } else if (depreciatedPrice > 0) {
         reason = 'Price based mainly on depreciation from original price.';
     } else {
-        reason = 'Price based on AI estimate (no market or original price data).';
+        reason = aiSuggestion?.reason || 'Price based on AI estimate (no market or original price data).';
     }
 
     return {
@@ -273,6 +334,8 @@ const buildFinalSuggestion = ({
             avgMarketPrice: avgPrice,
             originalPrice: originalPrice || null,
             depreciatedPrice: originalPrice ? Math.round(depreciatedPrice) : 0,
+            modelPrice: aiSuggestion?.suggestedPrice || null,
+            modelSource: aiSuggestion?.source || null,
             aiUsed,
             conditionApplied: conditionApplied || null,
             depreciationPercent: depreciationPercent || null
@@ -348,15 +411,98 @@ const suggestPrice = async (req, res) => {
             return res.status(400).json({ message: 'Original price must be a positive number.' });
         }
 
-        const cacheKey = buildCacheKey({ title, description, category, condition });
+        const brand = inferBrandFromText({ title, description, brand: req.body?.brand });
+        const modelCategory = mapCategoryForModel(category);
+        const modelCondition = mapConditionForModel(condition);
+        const modelText = `${title} ${description}`.trim();
+        const modelOriginalPrice = hasOriginalPrice ? originalPrice : 0;
+
+        const cacheKey = buildCacheKey({
+            title,
+            description,
+            category: modelCategory,
+            condition: modelCondition,
+            brand,
+            originalPrice: modelOriginalPrice
+        });
         const cachedAi = getCachedSuggestion(cacheKey);
         let aiSuggestion = cachedAi;
-        logInfo(requestId, 'cache lookup', { hit: Boolean(cachedAi) });
+        logInfo(requestId, 'cache lookup', { hit: Boolean(cachedAi), source: cachedAi?.source || null });
 
-        if (!aiSuggestion && !process.env.OPENAI_API_KEY) {
-            logWarn(requestId, 'OPENAI_API_KEY missing, using fallback');
-            aiSuggestion = fallbackSuggestion({ title, description, category, condition });
-            setCachedSuggestion(cacheKey, aiSuggestion);
+        if (aiSuggestion?.source === 'ml' && !PRICE_MODEL_ENABLED) {
+            logInfo(requestId, 'ml cache ignored (disabled)');
+            aiSuggestion = null;
+        }
+
+        if (!aiSuggestion && PRICE_MODEL_ENABLED) {
+            try {
+                const client = getPriceModelClient();
+                const predicted = await client.predict(
+                    {
+                        text: modelText,
+                        category: modelCategory,
+                        brand,
+                        condition: modelCondition,
+                        original_price: modelOriginalPrice
+                    },
+                    { timeoutMs: Number(process.env.PRICE_MODEL_TIMEOUT_MS || 15000) }
+                );
+
+                const predictedNum = Number(predicted);
+                const finalized = finalizeAiSuggestion({
+                    suggestedPrice: predictedNum,
+                    minPrice: predictedNum * 0.85,
+                    maxPrice: predictedNum * 1.15,
+                    reason: 'Based on trained regression price model using your product details.'
+                });
+                aiSuggestion = { ...finalized, source: 'ml' };
+                setCachedSuggestion(cacheKey, aiSuggestion);
+                logInfo(requestId, 'ml prediction', {
+                    predictedPrice: aiSuggestion.suggestedPrice,
+                    modelCategory,
+                    modelCondition,
+                    brand: brand || null,
+                    hasOriginalPrice,
+                    originalPrice: hasOriginalPrice ? originalPrice : null
+                });
+            } catch (err) {
+                logWarn(requestId, 'ml prediction failed, falling back', {
+                    message: err?.message,
+                    stack: err?.stack
+                });
+            }
+        }
+
+        if (aiSuggestion?.source === 'ml' && PRICE_MODEL_ENABLED) {
+            const response = {
+                suggestedPrice: aiSuggestion.suggestedPrice,
+                minPrice: aiSuggestion.minPrice,
+                maxPrice: aiSuggestion.maxPrice,
+                confidence: 'Low',
+                conditionApplied: null,
+                depreciationPercent: null,
+                breakdown: {
+                    avgMarketPrice: 0,
+                    originalPrice: hasOriginalPrice ? originalPrice : null,
+                    depreciatedPrice: 0,
+                    modelPrice: aiSuggestion.suggestedPrice,
+                    modelSource: aiSuggestion.source,
+                    aiUsed: false,
+                    conditionApplied: null,
+                    depreciationPercent: null
+                },
+                reason:
+                    aiSuggestion.reason ||
+                    'Based on trained regression price model using your product details.'
+            };
+
+            logInfo(requestId, 'returning ml-only suggestion', {
+                suggestedPrice: response.suggestedPrice,
+                minPrice: response.minPrice,
+                maxPrice: response.maxPrice
+            });
+            logInfo(requestId, 'done', { durationMs: Date.now() - startedAt, source: 'ml' });
+            return res.json(response);
         }
 
         if (!aiSuggestion && process.env.OPENAI_API_KEY) {
@@ -418,12 +564,12 @@ const suggestPrice = async (req, res) => {
                     logWarn(requestId, 'openai parse failed, using fallback', {
                         outputPreview: outputText.slice(0, 120)
                     });
-                    aiSuggestion = fallbackSuggestion({ title, description, category, condition });
+                    aiSuggestion = { ...fallbackSuggestion({ title, description, category, condition }), source: 'fallback' };
                     setCachedSuggestion(cacheKey, aiSuggestion);
                 }
 
                 if (parsed) {
-                    aiSuggestion = finalizeAiSuggestion(parsed);
+                    aiSuggestion = { ...finalizeAiSuggestion(parsed), source: 'openai' };
                     setCachedSuggestion(cacheKey, aiSuggestion);
                     logInfo(requestId, 'openai parsed', {
                         suggestedPrice: aiSuggestion.suggestedPrice,
@@ -436,14 +582,14 @@ const suggestPrice = async (req, res) => {
                     message: err?.message,
                     stack: err?.stack
                 });
-                aiSuggestion = fallbackSuggestion({ title, description, category, condition });
+                aiSuggestion = { ...fallbackSuggestion({ title, description, category, condition }), source: 'fallback' };
                 setCachedSuggestion(cacheKey, aiSuggestion);
             }
         }
 
         if (!aiSuggestion) {
-            logWarn(requestId, 'aiSuggestion missing after openai/fallback, using fallback');
-            aiSuggestion = fallbackSuggestion({ title, description, category, condition });
+            logWarn(requestId, 'aiSuggestion missing after model/openai/fallback, using fallback');
+            aiSuggestion = { ...fallbackSuggestion({ title, description, category, condition }), source: 'fallback' };
             setCachedSuggestion(cacheKey, aiSuggestion);
         }
 

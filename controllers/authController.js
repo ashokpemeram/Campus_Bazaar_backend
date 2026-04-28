@@ -5,6 +5,8 @@ const { normalizeEmail, getEmailDomain, isAllowedCollegeEmail } = require('../ut
 const { generateOtp, hashOtp, compareOtp, getOtpExpiry } = require('../utils/otp');
 const { sendVerificationOtp } = require('../utils/emailService');
 const { resolveCollegeName, normalizeCollegeName, upsertCollegeDomain } = require('../utils/collegeResolver');
+const { shouldUseCloudinary } = require('../utils/cloudinary');
+const { uploadBuffer } = require('../utils/cloudinaryUpload');
 
 const syncCollegeFields = async (user) => {
     if (user.collegeDomain && user.collegeName) return;
@@ -217,7 +219,18 @@ const updateProfile = async (req, res) => {
 
         if (name) user.name = name;
         if (password) user.password = password;
-        if (req.file) user.avatar = req.file.filename;
+        if (req.file) {
+            if (shouldUseCloudinary() && req.file.buffer) {
+                const baseFolder = (process.env.CLOUDINARY_FOLDER || 'campus-bazaar').replace(/\/$/, '');
+                const result = await uploadBuffer(req.file.buffer, {
+                    folder: `${baseFolder}/avatars`,
+                    resource_type: 'image'
+                });
+                user.avatar = result?.secure_url || user.avatar;
+            } else {
+                user.avatar = req.file.filename;
+            }
+        }
 
         await user.save();
         res.json({

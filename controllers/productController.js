@@ -1,5 +1,7 @@
 const Product = require('../models/Product');
 const User = require('../models/User');
+const { shouldUseCloudinary } = require('../utils/cloudinary');
+const { uploadBuffer } = require('../utils/cloudinaryUpload');
 
 const BASE_PRODUCT_FILTER = { status: 'approved', isAvailable: true };
 
@@ -264,7 +266,24 @@ const getNewArrivals = async (req, res) => {
 const addProduct = async (req, res) => {
     try {
         const { title, description, price, category, condition } = req.body;
-        const images = req.files ? req.files.map(f => f.filename) : [];
+        let images = [];
+
+        if (Array.isArray(req.files) && req.files.length > 0) {
+            if (shouldUseCloudinary() && req.files[0]?.buffer) {
+                const baseFolder = (process.env.CLOUDINARY_FOLDER || 'campus-bazaar').replace(/\/$/, '');
+                const uploads = await Promise.all(
+                    req.files.map((file) =>
+                        uploadBuffer(file.buffer, {
+                            folder: `${baseFolder}/products`,
+                            resource_type: 'image'
+                        })
+                    )
+                );
+                images = uploads.map((result) => result?.secure_url).filter(Boolean);
+            } else {
+                images = req.files.map((file) => file.filename).filter(Boolean);
+            }
+        }
         
         const product = new Product({
             title, description, price, category, condition,
